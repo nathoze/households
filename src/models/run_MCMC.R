@@ -4,7 +4,7 @@
 .libPaths("~/Rlib")
 
 rstan_model_exp = stan_model("models/Stan_scripts/Exp_Model.stan") ###   inference of the infection time.
-rstan_model_symptoms_gammma = stan_model("models/Stan_scripts/Symptoms_gamma.stan") ### Infer one value for the incubation period 
+rstan_model_symptoms_gamma = stan_model("models/Stan_scripts/Symptoms_gamma.stan") ### Infer one value for the incubation period 
 rstan_model_constant = stan_model("models/Stan_scripts/Constant_Model.stan") 
 rstan_model_positivity_3 = stan_model("models/Stan_scripts/Positivity_Model_3.stan") 
 
