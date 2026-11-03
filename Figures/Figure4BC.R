@@ -45,7 +45,7 @@ pinf_offset <- tibble(
 
 type_pos <- tibble(
   type = c("Quantitative VL", "Qualitative VL", "Symptoms only"),
-  type_numeric = c(3, 2, 1)
+  type_numeric = c(3, 1, 2)
 )
 
 models_to_load <- tibble(
@@ -70,7 +70,7 @@ resolve_model_name <- function(model) {
 
 load_fit_objects <- function(model, gi, ds, sar, alpha, n_hh, index) {
   model <- resolve_model_name(model)
-
+  
   paths <- load_household_fit(
     model = model,
     gi = gi,
@@ -80,7 +80,7 @@ load_fit_objects <- function(model, gi, ds, sar, alpha, n_hh, index) {
     n_hh = n_hh,
     index = index
   )
-
+  
   missing_paths <- unlist(paths)[!file.exists(unlist(paths))]
   if (length(missing_paths) > 0) {
     stop(
@@ -89,12 +89,12 @@ load_fit_objects <- function(model, gi, ds, sar, alpha, n_hh, index) {
       call. = FALSE
     )
   }
-
+  
   env <- new.env(parent = emptyenv())
   load(paths$data_path,   envir = env)
   load(paths$chains_path, envir = env)
   load(paths$ct_path,     envir = env)
-
+  
   list(
     xdata = env$xdata,
     parameters = env$parameters,
@@ -108,13 +108,13 @@ get_t95_infectiousness <- function(time, lambda) {
   ok <- is.finite(time) & is.finite(lambda)
   time <- time[ok]
   lambda <- lambda[ok]
-
+  
   if (length(time) < 2L || sum(lambda, na.rm = TRUE) <= 0) return(NA_real_)
-
+  
   dt <- c(0, diff(time))
   cumulative <- cumsum(lambda * dt)
   cumulative <- cumulative / max(cumulative, na.rm = TRUE)
-
+  
   idx <- which(cumulative >= 0.95)[1]
   if (is.na(idx)) return(NA_real_)
   time[idx]
@@ -138,14 +138,14 @@ get_t95_from_params <- function(T_P, T_U, V_P, m, t_grid, h) {
     tinfection = 0,
     normalize.time = FALSE
   )
-
+  
   lambda_t <- m * 10^(h * VL_t$logV)
   get_t95_infectiousness(time = VL_t$t, lambda = lambda_t)
 }
 
 get_t95_posterior_median <- function(Chains, xdata, id, t_grid, h) {
   VL <- get_VL_model_1(Chains, xdata, id)
-
+  
   get_t95_from_params(
     T_P = median(VL$T_P, na.rm = TRUE),
     T_U = median(VL$T_U, na.rm = TRUE),
@@ -173,11 +173,11 @@ get_param_sd <- function(parameters, base_name) {
     paste0(base_name, "_sd"),
     paste0(base_name, ".sd")
   )
-
+  
   for (nm in candidates) {
     if (!is.null(parameters[[nm]])) return(parameters[[nm]])
   }
-
+  
   stop("Could not find an input SD parameter for ", base_name)
 }
 
@@ -185,7 +185,7 @@ sample_input_vl_parameters <- function(parameters, n_samples) {
   T_P_sd <- get_param_sd(parameters, "T_P")
   T_U_sd <- get_param_sd(parameters, "T_U")
   V_P_sd <- get_param_sd(parameters, "V_P")
-
+  
   tibble(
     T_P = parameters$T_P_star * exp(rnorm(n_samples, mean = 0, sd = T_P_sd)),
     T_U = parameters$T_U_star * exp(rnorm(n_samples, mean = 0, sd = T_U_sd)),
@@ -196,10 +196,10 @@ sample_input_vl_parameters <- function(parameters, n_samples) {
 compute_input_t95_reference <- function(parameters, m_map, n_samples = 20000, t_grid, h) {
   sampled_vl <- sample_input_vl_parameters(parameters, n_samples)
   ref_list <- vector("list", nrow(m_map))
-
+  
   for (i in seq_len(nrow(m_map))) {
     m_i <- m_map$m_true[i]
-
+    
     t95_i <- vapply(
       seq_len(nrow(sampled_vl)),
       function(j) {
@@ -214,14 +214,14 @@ compute_input_t95_reference <- function(parameters, m_map, n_samples = 20000, t_
       },
       numeric(1)
     )
-
+    
     ref_list[[i]] <- tibble(
       pinf.input = m_map$pinf.input[i],
       input.mean.t95 = mean(t95_i, na.rm = TRUE),
       input.var.t95 = var(t95_i, na.rm = TRUE)
     )
   }
-
+  
   bind_rows(ref_list) %>%
     mutate(pinf.input = factor(pinf.input, levels = levels(m_map$pinf.input)))
 }
@@ -242,7 +242,7 @@ for (n.h in n.h.values) {
       for (j in seq_len(nrow(models_to_load))) {
         type_name <- models_to_load$type[j]
         model_name <- models_to_load$model[j]
-
+        
         fit <- load_fit_objects(
           model = model_name,
           gi = gi,
@@ -252,12 +252,12 @@ for (n.h in n.h.values) {
           n_hh = n.h,
           index = I
         )
-
+        
         xdata <- fit$xdata
         parameters <- fit$parameters
         Chains <- fit$Chains
         last_parameters <- parameters
-
+        
         if (model_name == "symptoms_only") {
           krow <- krow + 1L
           rows[[krow]] <- tibble(
