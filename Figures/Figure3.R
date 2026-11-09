@@ -569,11 +569,28 @@ prepare_plot_df <- function(df_plot, type_levels) {
     )
 }
 
+# Plot positions: one row per Ptr, with small design-specific offsets.
+ptr_positions <- data.frame(
+  pinf.input = factor(c("0.15", "0.3", "0.45"), levels = c("0.15", "0.3", "0.45")),
+  ptr_y = c(3, 2, 1)
+)
+design_colours <- c(
+  "Quantitative VL" = "#1b9e77",
+  "Symptoms only" = "#d95f02",
+  "Qualitative VL" = "#7570b3",
+  "Quantitative VL + contact symptoms" = "#246575"
+)
+design_plot_labels <- c(
+  "Quantitative VL" = "D^{VL}",
+  "Symptoms only" = "D^{TSO}",
+  "Qualitative VL" = "D^{PCR}",
+  "Quantitative VL + contact symptoms" = "D^{VL}*' + contact symptoms'"
+)
+
 make_type_pos <- function(type_levels) {
-  data.frame(
-    type = type_levels,
-    type_numeric = rev(seq_along(type_levels))
-  )
+  spread <- if (length(type_levels) == 2L) 0.12 else 0.18
+  data.frame(type = type_levels,
+             design_offset = seq(spread, -spread, length.out = length(type_levels)))
 }
 
 summarise_metric <- function(df2, variable) {
@@ -591,62 +608,69 @@ summarise_sd_metric <- function(df2, variable) {
   df2 %>%
     group_by(type, pinf.input, n.h) %>%
     dplyr::summarise(
-      Mean  = median(sqrt(.data[[variable]]), na.rm = TRUE),
+      Mean  = mean(sqrt(.data[[variable]]), na.rm = TRUE),
       lower = q025(sqrt(.data[[variable]])),
       upper = q975(sqrt(.data[[variable]])),
       .groups = "drop"
     )
 }
 
+# Points are means across replicates, including the mean of replicate SDs.
+# Bars are the 2.5th-97.5th percentiles across replicates, not CIs for the mean.
+plot_base_panel <- function(dat, xlab, type_pos_local) {
+  dat <- dat %>%
+    left_join(ptr_positions, by = "pinf.input") %>%
+    left_join(type_pos_local, by = "type") %>%
+    mutate(type = factor(type, levels = type_pos_local$type),
+           y_adjusted = ptr_y + design_offset)
+  if (anyNA(dat$ptr_y) || anyNA(dat$design_offset)) {
+    stop("Unrecognised Ptr or study design in plotting data.")
+  }
+  if (anyDuplicated(dat[c("type", "pinf.input")])) {
+    stop("Select one household sample size before plotting.")
+  }
+  ggplot(dat, aes(x = Mean, y = y_adjusted, color = type)) +
+    geom_segment(aes(x = lower, xend = upper, yend = y_adjusted), linewidth = 0.65) +
+    geom_point(size = 2.2) +
+    scale_y_continuous(breaks = c(3, 2, 1), labels = c("0.15", "0.30", "0.45"),
+                       limits = c(0.5, 3.5), minor_breaks = NULL) +
+    scale_color_manual(
+      values = design_colours, breaks = type_pos_local$type,
+      labels = function(x) parse(text = unname(design_plot_labels[x])), drop = FALSE
+    ) +
+    labs(x = xlab, y = expression(P[tr]), color = "Study design") +
+    theme_bw(base_size = 13) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major.y = element_blank(),
+          axis.text = element_text(size = 12),
+          axis.title.x = element_text(size = 13),
+          axis.title.y = element_text(size = 16, angle = 0, vjust = 0.5),
+          legend.title = element_text(size = 14),
+          legend.text = element_text(size = 14),
+          legend.position = "top")
+}
+
 plot_estimate_panel <- function(dat, reference_df, reference_col,
                                 xlab, type_pos_local, xlim_values = NULL) {
-  p <- dat %>%
-    left_join(reference_df, by = "pinf.input") %>%
-    left_join(type_pos_local, by = "type") %>%
-    left_join(pinf_offset, by = "pinf.input") %>%
-    mutate(y_adjusted = type_numeric + offset) %>%
-    ggplot(aes(x = Mean, y = y_adjusted, color = pinf.input)) +
-    geom_segment(aes(x = lower, xend = upper, y = y_adjusted, yend = y_adjusted)) +
-    geom_point(aes(x = .data[[reference_col]], y = y_adjusted),
-               size = 2, stroke = 1, color = "red", shape = 5) +
-    geom_point(size = 2, stroke = 1) +
-    scale_y_continuous(breaks = type_pos_local$type_numeric,
-                       labels = type_pos_local$type) +
-    labs(x = xlab, y = "Data type", color = "") +
-    theme_bw() +
-    theme(
-      strip.background = element_blank(),
-      axis.text.y = element_text(size = 0),
-      legend.position = "none"
-    ) +
-    scale_color_brewer(palette = "Dark2")
-
-  if (!is.null(xlim_values)) {
-    p <- p + xlim(xlim_values)
+  ref <- reference_df %>%
+    transmute(pinf.input, truth = .data[[reference_col]]) %>%
+    distinct() %>%
+    left_join(ptr_positions, by = "pinf.input")
+  if (anyDuplicated(ref$pinf.input) || nrow(ref) != 3L ||
+      anyNA(ref$ptr_y) || any(!is.finite(ref$truth))) {
+    stop("Each Ptr must have exactly one finite reference value.")
   }
-
-  p
+  plot_base_panel(dat, xlab, type_pos_local) +
+    geom_segment(
+      data = ref,
+      aes(x = truth, xend = truth, y = ptr_y - 0.29, yend = ptr_y + 0.29),
+      inherit.aes = FALSE, color = "red", linewidth = 0.75, show.legend = FALSE
+    ) +
+    coord_cartesian(xlim = xlim_values)
 }
 
 plot_chain_panel <- function(dat, xlab, type_pos_local) {
-  dat %>%
-    left_join(type_pos_local, by = "type") %>%
-    left_join(pinf_offset, by = "pinf.input") %>%
-    mutate(y_adjusted = type_numeric + offset) %>%
-    ggplot(aes(x = Mean, y = y_adjusted, color = pinf.input)) +
-    geom_point(size = 2, stroke = 1) +
-    geom_segment(aes(x = lower, xend = upper, y = y_adjusted, yend = y_adjusted)) +
-    scale_y_continuous(breaks = type_pos_local$type_numeric,
-                       labels = type_pos_local$type) +
-    labs(x = xlab, y = "Data type", color = "") +
-    theme_bw() +
-    theme(
-      strip.background = element_blank(),
-      axis.text.y = element_text(size = 0),
-      legend.position = "none"
-    ) +
-    scale_color_brewer(palette = "Dark2") +
-    xlim(c(0, 100))
+  plot_base_panel(dat, xlab, type_pos_local) + coord_cartesian(xlim = c(0, 100))
 }
 
 make_metric_plots <- function(df_plot, type_levels) {
@@ -686,21 +710,21 @@ make_metric_plots <- function(df_plot, type_levels) {
       df.GI,
       reference_df = mean_input_gi,
       reference_col = "input",
-      xlab = "Mean Generation interval (days)",
+      xlab = "Mean generation interval\n(days)",
       type_pos_local = type_pos_local
     ),
     G.DS = plot_estimate_panel(
       df.DS,
       reference_df = mean_input_incubation,
       reference_col = "incubation",
-      xlab = "Mean Incubation period (days)",
+      xlab = "Mean incubation period\n(days)",
       type_pos_local = type_pos_local
     ),
     G.Pinf = plot_estimate_panel(
       df.Pinf,
       reference_df = mean_input_pinf,
       reference_col = "input",
-      xlab = "Mean transmission probability",
+      xlab = "Mean transmission\nprobability",
       type_pos_local = type_pos_local,
       xlim_values = c(0, NA)
     ),
@@ -708,7 +732,7 @@ make_metric_plots <- function(df_plot, type_levels) {
       df.GI.M2,
       reference_df = sd_input_gi,
       reference_col = "sdGI",
-      xlab = "sd Generation interval (days)",
+      xlab = "SD generation interval\n(days)",
       type_pos_local = type_pos_local,
       xlim_values = c(0, NA)
     ),
@@ -716,24 +740,24 @@ make_metric_plots <- function(df_plot, type_levels) {
       df.DS.M2,
       reference_df = sd_input_incubation,
       reference_col = "sdDS",
-      xlab = "sd Incubation period (days)",
+      xlab = "SD incubation period\n(days)",
       type_pos_local = type_pos_local
     ),
     G.Pinf.M2 = plot_estimate_panel(
       df.Pinf.M2,
       reference_df = sd_input_pinf,
       reference_col = "sdGI",
-      xlab = "sd Transmission probability",
+      xlab = "SD transmission\nprobability",
       type_pos_local = type_pos_local
     ),
     G.Good.Reconstructions = plot_chain_panel(
       df.Good.Reconstructions,
-      xlab = "Proportion of correct transmission chains (%)",
+      xlab = "Correct transmission\nchains (%)",
       type_pos_local = type_pos_local
     ),
     G.Nb.Generations = plot_chain_panel(
       df.Nb.Generations,
-      xlab = "Proportion of correct number of generations (%)",
+      xlab = "Correct number of\ngenerations (%)",
       type_pos_local = type_pos_local
     )
   )
@@ -747,12 +771,10 @@ A <- 1.1
 dir.create(cfg$out_dir, recursive = TRUE, showWarnings = FALSE)
 
 export_plot <- function(plot, filename_base, width, height) {
-  ggpubr::ggexport(
-    plot,
-    filename = file.path(cfg$out_dir, paste0(filename_base, ".pdf")),
-    width = width,
-    height = height
-  )
+  ggsave(file.path(cfg$out_dir, paste0(filename_base, ".pdf")), plot,
+         width = width, height = height)
+  ggsave(file.path(cfg$out_dir, paste0(filename_base, ".png")), plot,
+         width = width, height = height, dpi = cfg$res_dpi)
 }
 
 # ======================================================================
@@ -772,8 +794,8 @@ df_main <- df %>%
 
 main_type_levels <- c(
   "Quantitative VL",
-  "Qualitative VL",
-  "Symptoms only"
+  "Symptoms only",
+  "Qualitative VL"
 )
 
 main_plots <- make_metric_plots(df_main, main_type_levels)
@@ -789,17 +811,13 @@ export_plot(
 )
 
 Figure3 <- ggarrange(
-  main_plots$G.GI + theme(strip.background = element_blank(), axis.text.y = element_text(size = 0)),
-  main_plots$G.GI.M2,
-  main_plots$G.DS + theme(strip.background = element_blank(), axis.text.y = element_text(size = 0)),
-  main_plots$G.DS.M2,
-  main_plots$G.Pinf + theme(strip.background = element_blank(), axis.text.y = element_text(size = 0)),
-  main_plots$G.Pinf.M2,
+  main_plots$G.GI, main_plots$G.DS, main_plots$G.Pinf,
   main_plots$G.Good.Reconstructions,
+  main_plots$G.GI.M2, main_plots$G.DS.M2, main_plots$G.Pinf.M2,
   main_plots$G.Nb.Generations,
-  labels = c("A", "D", "B", "E", "C", "F", "G", "H"),
-  nrow = 4,
-  ncol = 2
+  labels = c("A", "B", "C", "G", "D", "E", "F", "H"),
+  font.label = list(size = 18, face = "bold"),
+  nrow = 2, ncol = 4, common.legend = TRUE, legend = "top", align = "hv"
 )
 
 print(Figure3)
@@ -807,8 +825,8 @@ print(Figure3)
 export_plot(
   Figure3,
   filename_base = "Figure3",
-  width = 8 * A,
-  height = 8 * A
+  width = 11,
+  height = 6
 )
 
 # ======================================================================
@@ -831,17 +849,17 @@ supplementary_type_levels <- c(
 supplementary_plots <- make_metric_plots(df_supplementary, supplementary_type_levels)
 
 Figure3_supplementary_metrics <- ggarrange(
-  supplementary_plots$G.GI + theme(strip.background = element_blank(), axis.text.y = element_text(size = 0)),
-  supplementary_plots$G.DS + theme(strip.background = element_blank(), axis.text.y = element_text(size = 0)),
-  supplementary_plots$G.Pinf + theme(strip.background = element_blank(), axis.text.y = element_text(size = 0)),
+  supplementary_plots$G.GI,
+  supplementary_plots$G.DS,
+  supplementary_plots$G.Pinf,
   supplementary_plots$G.Good.Reconstructions,
   supplementary_plots$G.GI.M2,
   supplementary_plots$G.DS.M2,
   supplementary_plots$G.Pinf.M2,
   supplementary_plots$G.Nb.Generations,
   labels = c("A", "B", "C", "G", "D", "E", "F", "H"),
-  nrow = 2,
-  ncol = 4
+  font.label = list(size = 18, face = "bold"),
+  nrow = 2, ncol = 4, common.legend = TRUE, legend = "top", align = "hv"
 )
 
 print(Figure3_supplementary_metrics)
@@ -849,6 +867,6 @@ print(Figure3_supplementary_metrics)
 export_plot(
   Figure3_supplementary_metrics,
   filename_base = "Figure3_supplementary_metrics",
-  width = 10 * A,
-  height = 5 * A
+  width = 11,
+  height = 6
 )

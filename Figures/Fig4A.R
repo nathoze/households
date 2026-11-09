@@ -1,175 +1,26 @@
 # ======================================================================
-# Figure 4A — Recovery of transmission parameter m across study designs
+# Display: rows = Ptr, colors = study design
 # ======================================================================
 
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(ggplot2)
-  library(scales)
-  library(tibble)
-  library(ggpubr)
-  library(here)
-})
-
-source(here::here("src", "paths.R"))
-
-# ---- Config ----
-cfg <- list(
-  out_dir = here::here("Figures"),
-  res_dpi = 300
+design_cols <- c(
+  "Quantitative VL" = "#1b9e77",
+  "Symptoms only"   = "#d95f02",
+  "Qualitative VL"  = "#7570b3"
 )
 
-dir.create(cfg$out_dir, recursive = TRUE, showWarnings = FALSE)
+design_labels <- expression(D^{VL}, D^{TSO}, D^{PCR})
 
-# ---- Simulation grid ----
-gi <- 5
-ds <- 5
-alpha <- 1
-n.h.values <- c(100)
-sar.values <- c(0.15, 0.30, 0.45)
-I.values <- 1:100
-
-# ---- True input values of m ----
-m_map <- tibble(
+ptr_positions <- tibble(
   pinf.input = factor(
     c("0.15", "0.30", "0.45"),
     levels = c("0.15", "0.30", "0.45")
   ),
-  m_true = c(1.4e-05, 3.082862e-05, 5.3e-05)
+  ptr_y = c(3, 2, 1)
 )
 
-# ---- Models to load ----
-# Figure 4A compares the two viral-load study designs that estimate m:
-#   1. quantitative viral load, no symptom information for contacts
-#   2. qualitative viral load, no symptom information for contacts
-#
-# "Symptoms only" is kept as an empty reference row because this model
-# does not estimate the viral-load transmission parameter m.
-
-fits_to_load <- tibble(
-  design = c(
-    "Quantitative VL",
-    "Qualitative VL"
-  ),
-  model = c(
-    "quantitative_vl_no_contact_symptoms",
-    "qualitative_vl_no_contact_symptoms"
-  )
-)
-
-design_levels <- c(
-  "Quantitative VL",
-  "Symptoms only",
-  "Qualitative VL"
-)
-
-# Optional alias if another script still uses this variant.
-resolve_model_name <- function(model) {
-  aliases <- c(
-    quantitative_vl_with_contact_symptoms = "quantitative_vl_contact_symptoms"
-  )
-  
-  if (model %in% names(aliases)) {
-    return(unname(aliases[[model]]))
-  }
-  
-  model
-}
-
-load_chains_object <- function(model, gi, ds, sar, alpha, n_hh, index) {
-  model <- resolve_model_name(model)
-  
-  paths <- load_household_fit(
-    model = model,
-    gi = gi,
-    ds = ds,
-    sar = sar,
-    alpha = alpha,
-    n_hh = n_hh,
-    index = index
-  )
-  
-  if (!file.exists(paths$chains_path)) {
-    stop(
-      "Missing chains file for model '", model, "':\n",
-      paths$chains_path,
-      call. = FALSE
-    )
-  }
-  
-  env <- new.env(parent = emptyenv())
-  load(paths$chains_path, envir = env)
-  
-  if (!exists("Chains", envir = env)) {
-    stop("Object 'Chains' not found in: ", paths$chains_path, call. = FALSE)
-  }
-  
-  env$Chains
-}
-
-# ======================================================================
-# Extract posterior summaries of m
-# ======================================================================
-
-m_rows <- list()
-k <- 0L
-
-for (n.h in n.h.values) {
-  for (sar in sar.values) {
-    for (I in I.values) {
-      
-      for (j in seq_len(nrow(fits_to_load))) {
-        
-        design_name <- fits_to_load$design[j]
-        model_name <- fits_to_load$model[j]
-        
-        Chains <- load_chains_object(
-          model = model_name,
-          gi = gi,
-          ds = ds,
-          sar = sar,
-          alpha = alpha,
-          n_hh = n.h,
-          index = I
-        )
-        
-        m_post <- if ("logm" %in% names(Chains)) {
-          10^(Chains$logm)
-        } else if ("m" %in% names(Chains)) {
-          Chains$m
-        } else {
-          warning("No m or logm found for model: ", model_name)
-          next
-        }
-        
-        k <- k + 1L
-        m_rows[[k]] <- tibble(
-          design = design_name,
-          model = model_name,
-          pinf.input = sprintf("%.2f", sar),
-          gi = gi,
-          ds = ds,
-          n.h = n.h,
-          I = I,
-          m_mean = mean(m_post, na.rm = TRUE),
-          m_median = median(m_post, na.rm = TRUE),
-          m_lower = quantile(m_post, 0.025, na.rm = TRUE),
-          m_upper = quantile(m_post, 0.975, na.rm = TRUE)
-        )
-      }
-    }
-  }
-}
-
-if (length(m_rows) == 0L) {
-  stop("No posterior m summaries were extracted. Check paths.R and results/ folders.")
-}
-
-# Same colors as previous figure
-pinf_cols <- c(
-  "0.15" = "#1b9e77",
-  "0.30" = "#d95f02",
-  "0.45" = "#7570b3"
+design_positions <- tibble(
+  design = factor(design_levels, levels = design_levels),
+  design_offset = c(0.18, 0, -0.18)
 )
 
 df_m <- bind_rows(m_rows) %>%
@@ -177,87 +28,105 @@ df_m <- bind_rows(m_rows) %>%
     design = factor(design, levels = design_levels),
     pinf.input = factor(
       pinf.input,
-      levels = c("0.15", "0.30", "0.45")
+      levels = levels(ptr_positions$pinf.input)
     )
-  )
-
-# Add blank Symptoms-only level explicitly
-df_blank <- expand.grid(
-  design = factor("Symptoms only", levels = design_levels),
-  pinf.input = factor(
-    c("0.15", "0.30", "0.45"),
-    levels = levels(df_m$pinf.input)
-  )
-)
-
-# True input points for all study-design rows
-input_points <- expand.grid(
-  design = design_levels,
-  pinf.input = c("0.15", "0.30", "0.45")
-) %>%
-  as_tibble() %>%
-  mutate(
-    design = factor(design, levels = design_levels),
-    pinf.input = factor(pinf.input, levels = levels(df_m$pinf.input))
   ) %>%
-  left_join(m_map, by = "pinf.input")
+  left_join(ptr_positions, by = "pinf.input") %>%
+  left_join(design_positions, by = "design") %>%
+  mutate(y_design = ptr_y + design_offset)
+
+# One input reference per Ptr, shared by all three designs.
+input_ticks <- m_map %>%
+  left_join(ptr_positions, by = "pinf.input")
 
 # ======================================================================
 # Plot
 # ======================================================================
 
-G.m <- ggplot(df_m, aes(x = design, y = m_median, fill = pinf.input)) +
-  
-  geom_blank(
-    data = df_blank,
-    aes(x = design, y = NA_real_, fill = pinf.input),
-    inherit.aes = FALSE
-  ) +
-  
+G.m <- ggplot(
+  df_m,
+  aes(
+    x = m_median,
+    y = y_design,
+    fill = design,
+    color = design,
+    group = interaction(pinf.input, design)
+  )
+) +
   geom_boxplot(
+    orientation = "y",
+    width = 0.14,
     outlier.shape = NA,
-    width = 0.65,
-    position = position_dodge(width = 0.75)
+    alpha = 0.6,
+    show.legend = FALSE
   ) +
-  
-  geom_jitter(
-    aes(color = pinf.input),
+  geom_point(
     size = 1.1,
     alpha = 0.35,
-    position = position_jitterdodge(
-      jitter.width = 0.08,
-      dodge.width = 0.75
-    )
+    position = position_jitter(
+      width = 0,
+      height = 0.035,
+      seed = 42
+    ),
+    # Include every design in the legend, including Symptoms only.
+    show.legend = TRUE
   ) +
-  
-  geom_point(
-    data = input_points,
-    aes(x = design, y = m_true, group = pinf.input),
+  geom_segment(
+    data = input_ticks,
+    aes(
+      x = m_true,
+      xend = m_true,
+      y = ptr_y - 0.29,
+      yend = ptr_y + 0.29
+    ),
     inherit.aes = FALSE,
     color = "red",
-    shape = 5,
-    size = 2,
-    position = position_dodge(width = 0.75)
+    linewidth = 0.75,
+    show.legend = FALSE
   ) +
-  
-  scale_x_discrete(limits = rev(design_levels)) +
-  scale_fill_manual(values = pinf_cols) +
-  scale_color_manual(values = pinf_cols) +
-  scale_y_log10(labels = label_scientific()) +
-  
+  scale_x_log10(labels = label_scientific()) +
+  scale_y_continuous(
+    breaks = c(3, 2, 1),
+    labels = c("0.15", "0.30", "0.45"),
+    limits = c(0.5, 3.5),
+    minor_breaks = NULL
+  ) +
+  scale_fill_manual(
+    values = design_cols,
+    limits = design_levels,
+    guide = "none"
+  ) +
+  scale_color_manual(
+    values = design_cols,
+    limits = design_levels,
+    breaks = design_levels,
+    labels = design_labels,
+    drop = FALSE
+  ) +
+  guides(
+    color = guide_legend(
+      override.aes = list(alpha = 1, size = 2.5, shape = 16)
+    )
+  ) +
   labs(
-    x = "Study design",
-    y = expression("Estimated transmission parameter " * m),
-    fill = expression(P[tr]),
-    color = expression(P[tr])
+    x = expression("Estimated transmission parameter " * m),
+    y = expression(P[tr]),
+    color = "Study design"
   ) +
-  
-  coord_flip() +
-  
-  theme_bw() +
+  theme_bw(base_size = 13) +
   theme(
-    strip.background = element_blank(),
-    legend.position = "none"
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.text = element_text(size = 12),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(
+      size = 16,
+      angle = 0,
+      vjust = 0.5
+    ),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.position = "top"
   )
 
 print(G.m)
@@ -266,11 +135,17 @@ print(G.m)
 # Export
 # ======================================================================
 
-A <- 0.9
-
-ggpubr::ggexport(
+ggsave(
+  file.path(cfg$out_dir, "Figure4A.pdf"),
   G.m,
-  filename = file.path(cfg$out_dir, "Figure4A.pdf"),
-  width = 5 * A,
-  height = 3 * A
+  width = 5,
+  height = 6
+)
+
+ggsave(
+  file.path(cfg$out_dir, "Figure4A.png"),
+  G.m,
+  width = 5,
+  height = 6,
+  dpi = cfg$res_dpi
 )

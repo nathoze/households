@@ -38,15 +38,17 @@ m_map <- tibble(
   m_true = c(1.4e-05, 3.082862e-05, 5.3e-05)
 )
 
-pinf_offset <- tibble(
+# Display convention shared with Figure 4A.
+design_levels <- c("Quantitative VL", "Symptoms only", "Qualitative VL")
+design_colours <- c("Quantitative VL" = "#1b9e77",
+                    "Symptoms only" = "#d95f02", "Qualitative VL" = "#7570b3")
+design_labels <- expression(D^{VL}, D^{TSO}, D^{PCR})
+ptr_positions <- tibble(
   pinf.input = factor(c("0.15", "0.30", "0.45"), levels = c("0.15", "0.30", "0.45")),
-  offset = c(0.20, 0.10, 0.00)
+  ptr_y = c(3, 2, 1)
 )
-
-type_pos <- tibble(
-  type = c("Quantitative VL", "Qualitative VL", "Symptoms only"),
-  type_numeric = c(3, 1, 2)
-)
+design_positions <- tibble(type = design_levels, design_offset = c(0.18, 0, -0.18))
+type_pos <- tibble(type = design_levels)
 
 models_to_load <- tibble(
   type = c("Quantitative VL", "Qualitative VL", "Symptoms only"),
@@ -337,64 +339,73 @@ df_t95_var <- df_t95_summary %>%
     .groups = "drop"
   )
 
-G.T95.mean <- df_t95_mean %>%
-  left_join(ref_t95, by = "pinf.input") %>%
-  left_join(type_pos, by = "type") %>%
-  left_join(pinf_offset, by = "pinf.input") %>%
-  mutate(y_adjusted = type_numeric + offset) %>%
-  ggplot(aes(x = Mean, y = y_adjusted, color = pinf.input)) +
-  geom_segment(aes(x = lower, xend = upper, y = y_adjusted, yend = y_adjusted)) +
-  geom_point(aes(x = input.mean.t95, y = y_adjusted), size = 2, stroke = 1, color = "red", shape = 5) +
-  geom_point(size = 2, stroke = 1) +
-  scale_y_continuous(breaks = type_pos$type_numeric, labels = type_pos$type) +
-  labs(
-    x = "Mean time to reach 95% cumulative infectiousness (days)",
-    y = "Data type",
-    color = ""
-  ) +
-  theme_bw() +
-  theme(strip.background = element_blank(), axis.text.y = element_text(size = 0), legend.position = "none") +
-  scale_color_brewer(palette = "Dark2") +
-  xlim(c(0, NA))
+# Means and percentile intervals across simulation replicates are unchanged.
+plot_t95_by_ptr <- function(dat, reference_column, x_label) {
+  estimates <- dat %>%
+    left_join(ptr_positions, by = "pinf.input") %>%
+    left_join(design_positions, by = "type") %>%
+    mutate(type = factor(type, levels = design_levels), y_design = ptr_y + design_offset)
+  if (anyNA(estimates$ptr_y) || anyNA(estimates$design_offset)) {
+    stop("Unrecognised design or Ptr in T95 plotting data.")
+  }
+  if (anyDuplicated(estimates[c("type", "pinf.input")])) {
+    stop("Select a single household sample size before plotting.")
+  }
+  reference <- ref_t95 %>%
+    transmute(pinf.input, truth = .data[[reference_column]]) %>%
+    distinct() %>% left_join(ptr_positions, by = "pinf.input")
+  if (anyDuplicated(reference$pinf.input) || nrow(reference) != 3L ||
+      any(!is.finite(reference$truth))) {
+    stop("Each Ptr must have one finite input reference.")
+  }
+  ggplot(estimates, aes(x = Mean, y = y_design, colour = type)) +
+    geom_segment(aes(x = lower, xend = upper, yend = y_design), linewidth = 0.65) +
+    geom_point(size = 2.2) +
+    geom_segment(data = reference,
+                 aes(x = truth, xend = truth, y = ptr_y - 0.29, yend = ptr_y + 0.29),
+                 inherit.aes = FALSE, colour = "red", linewidth = 0.75,
+                 show.legend = FALSE) +
+    scale_colour_manual(values = design_colours, limits = design_levels,
+                        breaks = design_levels, labels = design_labels, drop = FALSE) +
+    scale_y_continuous(breaks = c(3, 2, 1), labels = c("0.15", "0.30", "0.45"),
+                       limits = c(0.5, 3.5), minor_breaks = NULL) +
+    labs(x = x_label, y = expression(P[tr]), colour = "Study design") +
+    theme_bw(base_size = 13) +
+    theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
+          axis.text = element_text(size = 12), axis.title.x = element_text(size = 13),
+          axis.title.y = element_text(size = 16, angle = 0, vjust = 0.5),
+          legend.title = element_text(size = 14), legend.text = element_text(size = 14),
+          legend.position = "top") +
+    coord_cartesian(xlim = c(0, NA))
+}
 
-G.T95.var <- df_t95_var %>%
-  left_join(ref_t95, by = "pinf.input") %>%
-  left_join(type_pos, by = "type") %>%
-  left_join(pinf_offset, by = "pinf.input") %>%
-  mutate(y_adjusted = type_numeric + offset) %>%
-  ggplot(aes(x = Mean, y = y_adjusted, color = pinf.input)) +
-  geom_segment(aes(x = lower, xend = upper, y = y_adjusted, yend = y_adjusted)) +
-  geom_point(aes(x = input.var.t95, y = y_adjusted), size = 2, stroke = 1, color = "red", shape = 5) +
-  geom_point(size = 2, stroke = 1) +
-  scale_y_continuous(breaks = type_pos$type_numeric, labels = type_pos$type) +
-  labs(
-    x = "Variance of time to reach 95% cumulative infectiousness (days^2)",
-    y = "Data type",
-    color = ""
-  ) +
-  theme_bw() +
-  theme(strip.background = element_blank(), axis.text.y = element_text(size = 0), legend.position = "none") +
-  scale_color_brewer(palette = "Dark2") +
-  xlim(c(0, NA))
-
+G.T95.mean <- plot_t95_by_ptr(df_t95_mean, "input.mean.t95",
+                              "Mean time to reach 95%\ncumulative infectiousness (days)")
+G.T95.var <- plot_t95_by_ptr(df_t95_var, "input.var.t95",
+                             "Variance of time to reach 95%\ncumulative infectiousness (days²)")
 Figure4BC <- ggarrange(
-  G.T95.mean,
-  G.T95.var,
-  labels = c("B", "C"),
-  nrow = 1,
-  ncol = 2
+  G.T95.mean, G.T95.var, labels = c("B", "C"),
+  font.label = list(size = 18, face = "bold"), nrow = 1, ncol = 2,
+  common.legend = TRUE, legend = "top", align = "hv"
 )
-
 print(Figure4BC)
+ggsave(file.path(cfg$out_dir, "Figure4BC.pdf"), Figure4BC, width = 8, height = 6)
+ggsave(file.path(cfg$out_dir, "Figure4BC.png"), Figure4BC, width = 8, height = 6, dpi = 300)
 
-A <- 0.9
-
-ggpubr::ggexport(
-  Figure4BC,
-  filename = file.path(cfg$out_dir, "Figure4BC.pdf"),
-  width = 6 * A,
-  height = 3 * A
-)
+# Source Fig4A first, then this script in the same R session to export A-C.
+# G.m should be the updated Figure 4A plot from the companion script.
+if (exists("G.m") && inherits(G.m, "ggplot")) {
+  Figure4_legend <- get_legend(G.T95.mean + theme(legend.position = "top"))
+  Figure4_by_Ptr <- ggarrange(
+    G.m + guides(fill = "none"), G.T95.mean, G.T95.var,
+    labels = c("A", "B", "C"), font.label = list(size = 18, face = "bold"),
+    nrow = 1, ncol = 3, common.legend = TRUE, legend = "top",
+    legend.grob = Figure4_legend, align = "hv"
+  )
+  print(Figure4_by_Ptr)
+  ggsave(file.path(cfg$out_dir, "Figure4_by_Ptr.pdf"), Figure4_by_Ptr, width = 11, height = 6)
+  ggsave(file.path(cfg$out_dir, "Figure4_by_Ptr.png"), Figure4_by_Ptr, width = 11, height = 6, dpi = 300)
+}
 
 saveRDS(
   list(
